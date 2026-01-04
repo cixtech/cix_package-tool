@@ -13,8 +13,6 @@
 # Revision: original v1.0
 #
 
-export GITHUB_USER="cixtech"
-
 export  BOLD="\e[1m"
 export  NORMAL="\e[0m"
 export	RED="\e[31m"
@@ -72,6 +70,92 @@ function do_blankfile() {
 	do
 		echo -e -n "\xFF" >> $1
 	done
+}
+
+function build_memcfg(){
+    echo -e "BUILD MEMCFG $1 Started."
+    local memcfg_dir="${PATH_PROJECT}/mem_config"
+    local memcfg_file="memory_config.bin"
+    local memcfg_target="$1"
+
+    cd $memcfg_dir
+
+    #compile and generate the memory config with the param: $MEM_CONF_FREQ and $MEM_CONF_CH
+    make || exit 1
+
+    cd -
+
+    cp $memcfg_dir/$memcfg_file $memcfg_target
+
+    if [[ -e "${memcfg_target}" ]]; then
+        echo -e "${GREEN}BUILD MEMCFG to $memcfg_target Success!!${NORMAL}"
+    else
+        echo -e "${RED}BUILD MEMCFG to $memcfg_target Failed!!${NORMAL}"
+        exit 1
+    fi
+}
+
+function build_pmcfg(){
+    echo -e "BUILD PMCFG $1 Started."
+    local pmcfg_dir="${PATH_PROJECT}/pm_config"
+    local pmcfg_file="csu_pm_config.bin"
+    local pmcfg_target="$1"
+
+    cd $pmcfg_dir
+
+    #compile and generate the pm config
+    make || exit 1
+
+    cd -
+
+    cp $pmcfg_dir/$pmcfg_file $pmcfg_target
+
+    if [[ -e "${pmcfg_target}" ]]; then
+        echo -e "${GREEN}BUILD PMCFG to $pmcfg_target Success!!${NORMAL}"
+    else
+        echo -e "${RED}BUILD PMCFG to $pmcfg_target Failed!!${NORMAL}"
+        exit 1
+    fi
+}
+
+function do_build_uefi() {
+
+cd $WORKSPACE/edk2
+git submodule update --init
+
+cd $WORKSPACE/edk2-platforms
+local COMMIT_HASH=`git rev-parse --short=12 HEAD`
+
+cd $WORKSPACE
+
+make -C edk2/BaseTools
+
+if [ ! -e $WORKSPACE/tools/acpica/generate/unix/bin ]; then
+	echo "Need build acpi tool!"
+	make -C tools/acpica
+fi
+
+source $WORKSPACE/edk2/edksetup.sh --reconfig
+
+rm -rf ${WORKSPACE}/Build
+
+local BUILD_DATE=`date +%VM%y%m%d%H%M%SN`
+local UEFI_TARGET=RELEASE
+local BOARD=evb
+local FASTBOOT_LOAD_TYPE="nvme"
+local UEFI_DSC_FILE="${UEFI_PROJECT_PATH}/${UEFI_PROJECT}/${UEFI_PROJECT}.dsc"
+local VARIABLE_TYPE=SPI
+local STMM_SUPPORT=TRUE
+local OS_SUPPORT_TYPE="common"
+
+build -a AARCH64 -t GCC5 -p $UEFI_DSC_FILE -b $UEFI_TARGET -D BOARD_NAME=$BOARD -D BUILD_DATE=$BUILD_DATE -D COMMIT_HASH=$COMMIT_HASH -D SMP_ENABLE=1 -D ACPI_BOOT_ENABLE=1 -D FASTBOOT_LOAD=$FASTBOOT_LOAD_TYPE -D VARIABLE_TYPE=$VARIABLE_TYPE -D STANDARD_MM=$STMM_SUPPORT -D SYSTEM_LOADER=$OS_SUPPORT_TYPE
+
+if [[ ! -e "Build/${UEFI_PROJECT}/${UEFI_TARGET}_GCC5/FV/SKY1_BL33_UEFI.fd" ]]; then
+    die "ERROR: build uefi failed!"
+fi
+
+cp Build/${UEFI_PROJECT}/${UEFI_TARGET}_GCC5/FV/SKY1_BL33_UEFI.fd ${PATH_OUT}
+
 }
 
 function do_build_tf_a() {
@@ -142,6 +226,7 @@ function do_package_all() {
     local build_key_type="pr"
     local path_out_temp="${PATH_OUT}/${build_key_type}"
     local flash_all_file_name="cix_flash_all"
+    local PATH_PROJECT="${PATH_ROOT}/${UEFI_PROJECT_FOLDER}/${UEFI_PROJECT_PATH}/${UEFI_PROJECT}"
 
     if [[ ! -e "${PATH_OUT}/tf-a.bin" ]]; then
         die "${RED}please generate tf-a.bin${NORMAL}"
@@ -154,27 +239,41 @@ function do_package_all() {
         rm -rf "${path_out_temp}"
     fi
     mkdir -p ${path_out_temp}
+    mkdir -p ${path_out_temp}/certs
 
     cp -rf ${PATH_PACKAGE_TOOL}/Firmwares ${path_out_temp}/
-    cp -rf ${PATH_PACKAGE_TOOL}/certs ${path_out_temp}/
     cp -rf ${PATH_PACKAGE_TOOL}/Keys ${path_out_temp}/
+
     cp -f ${PATH_PACKAGE_TOOL}/cert_create_rsa ${path_out_temp}/
+    cp -f ${PATH_PACKAGE_TOOL}/cert_uefi_create_rsa ${path_out_temp}/
+    cp -f ${PATH_PACKAGE_TOOL}/cix_package_tool ${path_out_temp}/
+    cp -f ${PATH_PACKAGE_TOOL}/cix_regen_trusted_key_cert ${path_out_temp}/    
+    cp -f ${PATH_PACKAGE_TOOL}/fiptool ${path_out_temp}/    
 
     if [[ ! -e "${path_out_temp}/Firmwares/dummy.bin" ]]; then
         do_blankfile "${path_out_temp}/Firmwares/dummy.bin" 8192
     fi
 
-    if [ "$(uname -m)" = "aarch64" ]; then
-      cp -f ${PATH_PACKAGE_TOOL}/AARCH64/cert_uefi_create_rsa ${path_out_temp}/
-      cp -f ${PATH_PACKAGE_TOOL}/AARCH64/cix_package_tool ${path_out_temp}/
-      cp -f ${PATH_PACKAGE_TOOL}/AARCH64/fiptool ${path_out_temp}/
-    else
-      cp -f ${PATH_PACKAGE_TOOL}/X86_64/cert_uefi_create_rsa ${path_out_temp}/
-      cp -f ${PATH_PACKAGE_TOOL}/X86_64/cix_package_tool ${path_out_temp}/
-      cp -f ${PATH_PACKAGE_TOOL}/X86_64/fiptool ${path_out_temp}/
+    cp ${PATH_PACKAGE_TOOL}/spi_flash_config_all.json ${path_out_temp}
+
+
+    # build project specific memory config
+    if [[ -e "${PATH_PROJECT}/mem_config" ]]; then
+        echo -e "${GREEN}found project specific memory config ${PATH_PROJECT}/mem_config${NORMAL}"
+        build_memcfg "${path_out_temp}/Firmwares/memory_config.bin"
     fi
 
-    cp ${PATH_PACKAGE_TOOL}/spi_flash_config_all.json ${path_out_temp}
+    # build project specific pm config
+    if [[ -e "${PATH_PROJECT}/pm_config" ]]; then
+        echo -e "${GREEN}found project specific pm config ${PATH_PROJECT}/pm_config${NORMAL}"
+        build_pmcfg "${path_out_temp}/Firmwares/csu_pm_config.bin"
+    fi
+
+    # update project specific low level firmware
+    if [[ -e "${PATH_PROJECT}/Firmwares/" ]]; then
+        echo -e "${GREEN}found project specific firmware folder ${PATH_PROJECT}/Firmwares/${NORMAL}"
+        cp ${PATH_PROJECT}/Firmwares/* ${path_out_temp}/Firmwares
+    fi
 
     echo "build bootloader2 (${build_key_type})"
     cd "${path_out_temp}"
@@ -202,23 +301,30 @@ function do_package_all() {
         --tos-fw-cert ${path_out_temp}/certs/tos_fw_cert.crt \
         ${path_out_temp}/Firmwares/bootloader2.img
 
+    if [[ ! -e "${path_out_temp}/Firmwares/bootloader2.img" ]]; then
+        die "ERROR: no file ${path_out_temp}/Firmwares/bootloader2.img"
+    fi
+
+
+    # Generate bootloader3 image
+    cd "${path_out_temp}"
+
+    ./cix_regen_trusted_key_cert -p ${path_out_temp}/Keys/oem_publickey.pem -s ${path_out_temp}/Keys/oem_privatekey.pem -o ${path_out_temp}/certs/trusted_key_no.crt
+
     ./cert_uefi_create_rsa --key-alg rsa --key-size 3072 --hash-alg sha256 -p --ntfw-nvctr 223 \
         --nt-fw-cert ${path_out_temp}/certs/nt_fw_cert.crt \
         --nt-fw-key-cert ${path_out_temp}/certs/nt_fw_key.crt \
         --nt-fw-key ${path_out_temp}/Keys/oem_privatekey.pem \
         --non-trusted-world-key ${path_out_temp}/Keys/oem_privatekey.pem \
-        --nt-fw ${path_out_temp}/Firmwares/SKY1_BL33_UEFI.fd
+        --nt-fw ${PATH_OUT}/SKY1_BL33_UEFI.fd
 
     ./fiptool create \
         --trusted-key-cert ${path_out_temp}/certs/trusted_key_no.crt \
         --nt-fw-key-cert ${path_out_temp}/certs/nt_fw_key.crt \
         --nt-fw-cert ${path_out_temp}/certs/nt_fw_cert.crt \
-        --nt-fw ${path_out_temp}/Firmwares/SKY1_BL33_UEFI.fd \
+        --nt-fw ${PATH_OUT}/SKY1_BL33_UEFI.fd \
         ${path_out_temp}/Firmwares/bootloader3.img
-
-    if [[ ! -e "${path_out_temp}/Firmwares/bootloader2.img" ]]; then
-        die "ERROR: no file ${path_out_temp}/Firmwares/bootloader2.img"
-    fi
+    cd -   
 
     if [[ ! -e "${path_out_temp}/Firmwares/bootloader3.img" ]]; then
         die "ERROR: no file ${path_out_temp}/Firmwares/bootloader3.img"
@@ -243,25 +349,13 @@ function do_help() {
     cat <<- EOF
     <options>:
         -h, --help:               show the help info
-        -r, --res:                fetch the source codes
         -b, --build:              build and package default if no param
                                   $SELF -b       # build tf-a and tee, and package them
                                   $SELF -b tf_a  # build tf-a only
                                   $SELF -b tee   # build tee only
+                                  $SELF -b uefi  $ build uefi only
         -t, --toolchain:          the toolchain path and CROSS_COMPILE value will be "<toolchain path>/bin/aarch64-none-elf-"
 EOF
-}
-
-function do_fetch_res() {
-    if [[ ! -e "${PATH_ROOT}/bsp" ]]; then
-        mkdir -p "${PATH_ROOT}/bsp"
-    fi
-    if [[ ! -e "${PATH_TEE}" ]] || [[ ! -e "${PATH_TEE}/.git" ]]; then
-        git clone https://github.com/${GITHUB_USER}/cix_opensource__tee__op-tee.git -b cix_p1_k6.6_2025q3_tfa_open_dev ${PATH_TEE}
-    fi
-    if [[ ! -e "${PATH_TFA}" ]] || [[ ! -e "${PATH_TFA}/.git" ]]; then
-        git clone https://github.com/${GITHUB_USER}/cix_opensource__arm-trusted-firmware.git -b cix_p1_k6.6_2025q3_tfa_open_dev ${PATH_TFA}
-    fi
 }
 
 function do_build() {
@@ -283,7 +377,7 @@ function do_build() {
     fi
 
     echo "******************ENV VALUE***********************"
-    echo -e "PATH_WORKSPACE:                  ${YELLOW}${PATH_WORKSPACE}${NORMAL}"
+    echo -e "PATH_PATH_ROOT:                  ${YELLOW}${PATH_PATH_ROOT}${NORMAL}"
     echo -e "PATH_ROOT:                       ${YELLOW}${PATH_ROOT}${NORMAL}"
     echo -e "CROSS_COMPILE:                   ${YELLOW}${CROSS_COMPILE}${NORMAL}"
     echo -e "PATH_TFA:                        ${YELLOW}${PATH_TFA}${NORMAL}"
@@ -292,6 +386,7 @@ function do_build() {
     echo -e "PATH_OUT:                        ${YELLOW}${PATH_OUT}${NORMAL}"
     echo "**************************************************"
 
+    do_build_uefi
     do_build_tf_a
     do_build_tee
 
@@ -303,18 +398,30 @@ trap cix_handle_error ERR
 PARALLELISM=`grep -c ^processor /proc/cpuinfo 2>/dev/null`
 PATH_ORIGINAL=$(pwd)
 export SELF=$0
-export PATH_WORKSPACE="$(realpath --no-symlinks "$(dirname "${BASH_SOURCE[0]}")")"
+export PATH_ROOT="$(realpath --no-symlinks "$(dirname "${BASH_SOURCE[0]}")")"
 
-export PATH_ROOT="$(realpath --no-symlinks "${PATH_WORKSPACE}/..")"
 export PLATFORM=cix
 export BUILD_MODE=release
 export CROSS_COMPILE=${CROSS_COMPILE:-${PATH_ROOT}/tools/gcc/gcc-arm-10.2-2020.11-x86_64-aarch64-none-elf/bin/aarch64-none-elf-}
 
-export PATH_TFA=${PATH_TFA:-${PATH_ROOT}/bsp/tf-a}
-export PATH_TEE=${PATH_TEE:-${PATH_ROOT}/bsp/tee}
+export PATH_TFA=${PATH_TFA:-${PATH_ROOT}/tf-a}
+export PATH_TEE=${PATH_TEE:-${PATH_ROOT}/tee}
 
-export PATH_PACKAGE_TOOL=${PATH_PACKAGE_TOOL:-${PATH_WORKSPACE}}
+export PATH_PACKAGE_TOOL=${PATH_PACKAGE_TOOL:-${PATH_ROOT}/cix_package-tool}
 export PATH_OUT="${PATH_ROOT}/output"
+
+
+export WORKSPACE="${PATH_ROOT}"
+
+export UEFI_PROJECT_FOLDER="edk2-platforms"
+export UEFI_PROJECT_PATH="Platform/Radxa/Orion"
+export UEFI_PROJECT="O6"
+
+export GCC5_AARCH64_PREFIX="${CROSS_COMPILE}"
+export IASL_PREFIX="${PATH_ROOT}/tools/acpica/generate/unix/bin/"
+export PACKAGES_PATH=$PATH_ROOT/edk2:$PATH_ROOT/edk2-platforms:$PATH_ROOT/edk2-non-osi
+
+set -e
 
 CMD="build"
 PARAM=""
@@ -324,9 +431,6 @@ while [[ $# -gt 0 ]]; do
         CMD="help"
         do_help
         exit 0
-        ;;
-    ("-r" | "--res")
-        CMD="resource"
         ;;
     ("-b" | "--build")
         CMD="build"
@@ -351,9 +455,6 @@ done
 case "${CMD}" in
     ("help")
         do_help
-        ;;
-    ("resource")
-        do_fetch_res
         ;;
     ("build")
         if [[ ${#PARAM} -gt 1 ]]; then
