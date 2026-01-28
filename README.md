@@ -64,9 +64,9 @@ You should find the built result files in directory ./output/ if all goes well.
 | cix_flash_all.bin        | the flash image file with signature                 |
 
 # About OEM Keys
-**At present, we do not support using customers' own OEM keys. Please use the default key provided by CIX directly. CIX company is developing a KMS system, which is scheduled to be completed by the end of December 2025. By then, customers will be able to maintain their signature keys.**
+You can use your own OEM keys to sign various image files.
 
-**So please do not modify the files below temporarily:**
+Create your own OEM keys and replace Keys/oem-privatekye.pem and Keys/oem-publickey.pem
 
     ./Keys/oem_privatekye.pem
     ./Keys/oem_publickey.pem

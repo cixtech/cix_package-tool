@@ -159,6 +159,7 @@ function do_package_all() {
     cp -rf ${PATH_PACKAGE_TOOL}/certs ${path_out_temp}/
     cp -rf ${PATH_PACKAGE_TOOL}/Keys ${path_out_temp}/
     cp -f ${PATH_PACKAGE_TOOL}/cert_create_rsa ${path_out_temp}/
+    cp -f ${PATH_PACKAGE_TOOL}/cix_regen_trusted_key_cert ${path_out_temp}/
 
     if [[ ! -e "${path_out_temp}/Firmwares/dummy.bin" ]]; then
         do_blankfile "${path_out_temp}/Firmwares/dummy.bin" 8192
@@ -201,6 +202,8 @@ function do_package_all() {
         --soc-fw-cert ${path_out_temp}/certs/bl31_fw_content.crt \
         --tos-fw-cert ${path_out_temp}/certs/tos_fw_cert.crt \
         ${path_out_temp}/Firmwares/bootloader2.img
+
+    ./cix_regen_trusted_key_cert -p ${path_out_temp}/Keys/oem_publickey.pem -s ${path_out_temp}/Keys/oem_privatekey.pem -o ${path_out_temp}/certs/trusted_key_no.crt
 
     ./cert_uefi_create_rsa --key-alg rsa --key-size 3072 --hash-alg sha256 -p --ntfw-nvctr 223 \
         --nt-fw-cert ${path_out_temp}/certs/nt_fw_cert.crt \
